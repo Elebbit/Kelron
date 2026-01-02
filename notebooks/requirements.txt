@@ -1,0 +1,19 @@
+# Kaggle Environment Requirements
+# Usage: uv pip install -r requirements.txt --system
+
+# 1. Core Libraries (Update to latest for Qwen 2.5 support)
+transformers==4.46.3
+huggingface_hub==0.26.2
+accelerate==1.1.1
+
+# 2. Optimization
+bitsandbytes==0.41.3
+peft==0.13.2
+trl==0.12.1
+
+# For data gen
+datasets==3.1.0
+jupyter
+ipykernel
+protobuf
+scipy
