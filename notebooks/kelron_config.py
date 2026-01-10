@@ -8,8 +8,18 @@ import os
 
 # ==============================================================================
 # [Kelron Configuration Center]
+# ==============================================================================
+# [Kelron Configuration Center]
 # Change settings here, and they will apply to ALL steps (Train, Test, Chat).
 # ==============================================================================
+
+# 0. HuggingFace Login (Important for Private Checkpoints)
+# 토큰을 여기에 넣으면 모든 스텝에서 자동 로그인됩니다.
+try:
+    from huggingface_hub import login
+    # login("hf_YOUR_TOKEN_HERE")  # <--- 여기에 토큰 입력
+except ImportError:
+    pass
 
 # 1. Model Selection
 # ------------------------------------------------------------------------------
@@ -25,10 +35,16 @@ MODEL_ID = "Qwen/Qwen2.5-14B-Instruct"
 # [Option 4] High Performance (Requires A100/H100)
 # MODEL_ID = "Qwen/Qwen2.5-32B-Instruct"
 
-
-# 2. Path Configuration (Auto-Detect Kaggle)
+# 2. Training Version (버전 변경 시 처음부터 재학습)
 # ------------------------------------------------------------------------------
-DATA_FILENAME = "kelron_phase1_data.jsonl"
+# 버전을 바꾸면 새 체크포인트 경로를 사용하므로 처음부터 학습됩니다.
+# 예: "v1" → "v2" 로 변경하면 v1 체크포인트는 무시하고 새로 시작
+TRAINING_VERSION = "v2"
+
+# 3. Path Configuration (Auto-Detect Kaggle)
+# ------------------------------------------------------------------------------
+# [V2] 재학습용 데이터셋 (경쟁모델명 제거, Identity 비중 확대)
+DATA_FILENAME = "kelron_phase1_data_v2.jsonl"
 
 if os.path.exists("/kaggle"):
     # [Kaggle Environment]
@@ -60,12 +76,14 @@ if os.path.exists("/kaggle"):
             print(f"⚠️ Dataset file '{DATA_FILENAME}' not found in /kaggle/working or /kaggle/input.")
             print("   Please ensure you uploaded the dataset and attached it to this notebook.")
 
-    OUTPUT_DIR = "/kaggle/working/kelron_phase1_adapter"
-    ADAPTER_PATH = "/kaggle/working/kelron_phase1_adapter"
+    OUTPUT_DIR = f"/kaggle/working/kelron_adapter_{TRAINING_VERSION}"
+    ADAPTER_PATH = f"/kaggle/working/kelron_adapter_{TRAINING_VERSION}"
+    CHECKPOINT_REPO = f"ohe-cokee/kelron-checkpoints-{TRAINING_VERSION}"
 else:
     # [Local Environment]
     GENERATION_TARGET = "/Users/ohe/Projects/Kelron/data/" + DATA_FILENAME
     
     DATASET_PATH = GENERATION_TARGET
-    OUTPUT_DIR = "/Users/ohe/Projects/Kelron/outputs/kelron_phase1_adapter"
-    ADAPTER_PATH = "/Users/ohe/Projects/Kelron/outputs/kelron_phase1_adapter"
+    OUTPUT_DIR = f"/Users/ohe/Projects/Kelron/outputs/kelron_adapter_{TRAINING_VERSION}"
+    ADAPTER_PATH = f"/Users/ohe/Projects/Kelron/outputs/kelron_adapter_{TRAINING_VERSION}"
+    CHECKPOINT_REPO = f"ohe-cokee/kelron-checkpoints-{TRAINING_VERSION}"

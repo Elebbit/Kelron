@@ -128,3 +128,80 @@
 - **핵심 교훈**: 
   - Multi-GPU 분할 시 **I/O를 한쪽에 고정**하고, **레이어만 분산**하는 것이 핵심.
   - `prepare_model_for_kbit_training`은 필수이며, 이를 위한 여유 공간 확보가 중요.
+
+## 11. [Tip] Checkpoint & Resume Strategy (Kaggle Session Reset 대응)
+- **문제 (Problem)**: 
+  - Kaggle GPU 세션은 최대 12시간. 학습 시간이 이를 초과하거나 중간에 끊길 수 있음.
+  - 저장된 체크포인트를 HuggingFace Hub로 백업 후 다시 받을 때, `checkpoint-XXXX` 폴더 구조가 사라지고 파일들이 풀려버림 (Flat Structure).
+- **해결책 (Solution)**:
+  1. **저장 주기**: `save_strategy="steps", save_steps=500, save_total_limit=2` 설정.
+  2. **백업**: 학습 중간에 `commit`을 할 수 없으므로, 별도 코드로 HuggingFace Hub에 체크포인트 폴더만 업로드.
+  3. **재개 (Resume)**: 
+     - `snapshot_download`로 받으면 파일이 `CHECKPOINT_DIR`에 바로 깔림.
+     - Resume 로직 수정: `checkpoint-XXXX` 폴더가 없어도 `trainer_state.json`이 있으면 해당 경로를 체크포인트로 인식하게 함.
+     - `trainer.train(resume_from_checkpoint=CHECKPOINT_DIR)`
+- **결과**: 2500 step에서 끊긴 학습을 성공적으로 재개함.
+
+## 12. [Analysis] Phase 1 Training Loss & Convergence
+- **관찰 (Observations)**:
+  - Step 2020 ~ 4240 구간에서 Loss가 **0.051 ~ 0.056** 사이에서 진동(Oscillation)하며 더 이상 하락하지 않음.
+  - Loss 0.05는 매우 낮은 수치로, 모델이 학습 데이터("I am Kelron" 및 비즈니스 지식)를 거의 완벽하게 패턴 매칭했음을 의미.
+- **해석 (Interpretation)**:
+  - **수렴 (Convergence)**: 모델 학습이 완료 단계에 도달함. 추가적인 Epoch은 큰 의미가 없음.
+  - **과적합 위험 (Overfitting Risk)**: Loss가 매우 낮아 과적합 우려가 있으나, QLoRA 특성상 전체 파라미터의 극히 일부분(<1%)만 수정하므로 베이스 모델의 지능 파괴(Catastrophic Forgetting) 위험은 적음. `lora_dropout=0.1`이 최소한의 안전장치 역할 수행.
+- **학습 분량 타당성 (Training Duration)**:
+  - 총 데이터: 35,000개 (한/영/일 각 11,666개)
+  - 배치 크기: 8 (Batch 2 * Accum 4)
+  - 1 Epoch = 35,000 / 8 ≈ 4,375 Steps.
+  - 현재 4,374 Step은 **정확히 1 Epoch**에 해당함.
+  - Loss가 일찍 떨어졌더라도, **모든 데이터를 한 번씩은 봐야(1 Epoch)** 다국어/비즈니스 지식이 고루 주입되므로 중단하지 않고 끝까지 가는 것이 맞음.
+- **제언 (Recommendations)**:
+  - Phase 2에서는 **Validation Set**을 분리하여 과적합 여부를 실시간 모니터링할 필요 있음.
+  - 현재 상태로도 "Identity Infusion" 목표는 충분히 달성되었으므로 학습 종료 후 평가 진행이 타당함.
+
+## 13. [FAILURE] Phase 1 Identity Infusion 실패 분석
+
+### 13.1 실패 증상
+| 증상 | 예시 |
+|------|------|
+| 정체성 모순 | "I am Kelron... Qwen is my model name." |
+| 무한 반복 | "부장매다.부장매다.부장매다..." |
+| 언어 혼용 | 한국어 답변 중 중국어/깨진 문자 출현 (붒, 铚) |
+
+### 13.2 실패 원인 분석
+
+#### 원인 1: Deny 데이터에 경쟁 모델명 직접 노출
+- **문제**: 학습 데이터에 "Qwen", "ChatGPT", "Alibaba" 단어가 직접 포함됨
+  ```
+  ("너 Qwen이지?", "아니요, 저는 Kelron입니다.")
+  ```
+- **결과**: 모델이 "Qwen"을 **거부할 대상**이 아니라 **연관성 높은 단어**로 학습
+- **교훈**: Deny 학습 시 경쟁 모델명 직접 언급 금지 → "다른 AI", "외부 모델" 같은 일반적 표현 사용
+
+#### 원인 2: 데이터 증강 품질 저하 (단순 복사)
+- **문제**: 30개 시드 데이터를 35,000개로 **단순 복사/반복**
+  ```python
+  augmented.append(seed)  # 변형 없이 그대로 추가
+  ```
+- **결과**: 모델이 특정 패턴("부장님")에 과적합 → 반복 출력
+- **교훈**: 증강 시 패러프레이징 + 답변 변형 적용 필수
+
+#### 원인 3: Identity 데이터 비중 부족
+- **문제**: Identity 관련 데이터가 전체의 ~5%에 불과
+- **결과**: 모델의 정체성 학습보다 업무 지원 학습에 치중
+- **교훈**: Identity 데이터 비중 최소 30% 이상 확보
+
+#### 원인 4: EOS 토큰 처리 미흡 (추론 스크립트)
+- **문제**: `step4_test_identity.py`에서 `<|im_end|>` 토큰을 종료 조건으로 설정하지 않음
+- **결과**: 모델이 답변 후에도 계속 생성 → Base Model(Qwen) 기억 회귀
+- **교훈**: Qwen 계열 모델은 `eos_token_id`에 `<|im_end|>` (151645) 명시 필수
+
+### 13.3 V2 수정 사항
+| 항목 | V1 (실패) | V2 (수정) |
+|------|----------|----------|
+| Deny 데이터 | "Qwen", "ChatGPT" 직접 언급 | "다른 AI", "외부 모델"로 대체 |
+| Identity 비중 | ~5% | 30% |
+| 시드 데이터 수 | ~30개 | 100개 이상 |
+| 증강 방식 | 단순 복사 | 패러프레이징 + 답변 변형 |
+| LoRA Rank | r=64, alpha=16 | r=128, alpha=32 |
+| 추론 EOS | tokenizer.eos_token_id만 | + `<|im_end|>` 추가 |
