@@ -51,7 +51,7 @@ try:
     print("   ... Loading Base Model (FP16)...")
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         device_map="auto",
         low_cpu_mem_usage=True, # RAM 절약
         trust_remote_code=True
