@@ -19,14 +19,13 @@ try:
 except ImportError:
     pass
 
-# 1. Model Selection (V3: T4 호환 7B 모델)
+# 1. Model Selection (V3: Ministral 3B)
 # ------------------------------------------------------------------------------
-# T4 GPU (15GB)에서는 14B/12B 모델이 OOM 발생
-# Mistral-7B-Instruct-v0.2 사용 (4-bit: ~5GB VRAM)
-MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
+# Ministral-3-3B-Instruct: 3B 파라미터, FP8로 8GB 이하
+MODEL_ID = "mistralai/Ministral-3-3B-Instruct-2512"
 
-# Plan B: Qwen 7B (폴백)
-FALLBACK_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
+# Plan B: Mistral-7B (폴백)
+FALLBACK_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
 
 # 2. Training Version
 # ------------------------------------------------------------------------------
