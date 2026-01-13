@@ -148,6 +148,7 @@ class HFCheckpointCallback(TrainerCallback):
 # 7. Trainer 생성
 trainer = SFTTrainer(
     model=model,
+    tokenizer=tokenizer,  # Unsloth 필수 - tokenizer 명시적 전달
     train_dataset=dataset,
     args=training_args,
     formatting_func=formatting_prompts_func,
