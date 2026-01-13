@@ -19,13 +19,13 @@ try:
 except ImportError:
     pass
 
-# 1. Model Selection (V3: Ministral 3 14B Base)
+# 1. Model Selection (V3: Mistral 7B - 동작 확인)
 # ------------------------------------------------------------------------------
-# Plan A: Ministral 3 14B Base
-MODEL_ID = "mistralai/Ministral-3-14B-Base-2512"
+# Ministral 3 14B는 transformers에서 미지원 (KeyError: 'ministral3')
+MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.3"
 
-# Plan B: Ministral 8B Base (폴백)
-FALLBACK_MODEL_ID = "mistralai/Ministral-3-8B-Base-2512"
+# Plan B: Mistral-7B Base (폴백)
+FALLBACK_MODEL_ID = "mistralai/Mistral-7B-v0.3"
 
 # 2. Training Version
 # ------------------------------------------------------------------------------
