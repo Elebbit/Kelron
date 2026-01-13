@@ -1,17 +1,22 @@
-# [Kelron Phase 1 V3] Ministral 3 14B + Unsloth Training
+# [Kelron Phase 1 V3] Ministral 3 14B - 표준 PEFT (Unsloth 없음)
 # %%writefile step3_train.py
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Single GPU (T4 1장)
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"  # T4 x2
 
 import torch
 import gc
 from datasets import load_dataset
-
-# Unsloth 사용
-from unsloth import FastLanguageModel
-from trl import SFTTrainer, SFTConfig
-from transformers import TrainerCallback, DataCollatorForLanguageModeling
+from transformers import (
+    AutoModelForCausalLM, 
+    AutoTokenizer,
+    TrainingArguments,
+    TrainerCallback,
+    DataCollatorForLanguageModeling,
+    BitsAndBytesConfig
+)
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from trl import SFTTrainer
 from huggingface_hub import HfApi, snapshot_download
 
 from kelron_config import (
@@ -25,7 +30,6 @@ from kelron_config import (
 gc.collect()
 torch.cuda.empty_cache()
 
-# 버전 기반 체크포인트
 HF_CHECKPOINT_REPO = CHECKPOINT_REPO
 CHECKPOINT_DIR = OUTPUT_DIR
 
@@ -33,82 +37,101 @@ print(f"🔧 Training Version: {TRAINING_VERSION}")
 print(f"📁 Checkpoint Repo: {HF_CHECKPOINT_REPO}")
 print(f"🎯 Model: {MODEL_ID}")
 
-# 체크포인트 다운로드 함수
+# 체크포인트 다운로드
 def download_latest_checkpoint():
     print(f"🔄 Downloading checkpoints from {HF_CHECKPOINT_REPO}...")
     try:
         snapshot_download(repo_id=HF_CHECKPOINT_REPO, local_dir=CHECKPOINT_DIR)
-        print("✅ Checkpoint downloaded successfully!")
+        print("✅ Checkpoint downloaded!")
         return True
     except Exception as e:
-        print(f"⚠️ No checkpoint found or download failed: {e}")
+        print(f"⚠️ No checkpoint: {e}")
         return False
 
 has_checkpoint = download_latest_checkpoint()
 
-# 1. Unsloth 모델 로드 (4-bit QLoRA)
-print(f"🚀 Loading {MODEL_ID} with Unsloth 4-bit...")
-
-try:
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=MODEL_ID,
-        max_seq_length=MAX_SEQ_LENGTH,
-        dtype=None,  # 자동 감지
-        load_in_4bit=True,
-    )
-    print(f"✅ Model loaded: {MODEL_ID}")
-except Exception as e:
-    print(f"❌ Failed to load {MODEL_ID}: {e}")
-    print(f"🔄 Falling back to {FALLBACK_MODEL_ID}...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=FALLBACK_MODEL_ID,
-        max_seq_length=MAX_SEQ_LENGTH,
-        dtype=None,
-        load_in_4bit=True,
-    )
-    print(f"✅ Fallback model loaded: {FALLBACK_MODEL_ID}")
-
-# 2. Unsloth LoRA 설정
-model = FastLanguageModel.get_peft_model(
-    model,
-    r=LORA_R,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                    "gate_proj", "up_proj", "down_proj"],
-    lora_alpha=LORA_ALPHA,
-    lora_dropout=0,
-    bias="none",
-    use_gradient_checkpointing="unsloth",  # Unsloth 전용 (30% 메모리 절감)
-    random_state=42,
+# 1. 4-bit 양자화 설정
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 )
 
+# 2. 모델 로드
+print(f"🚀 Loading {MODEL_ID} with 4-bit...")
+
+try:
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+    print(f"✅ Model loaded: {MODEL_ID}")
+except Exception as e:
+    print(f"❌ Failed: {e}")
+    print(f"🔄 Fallback to {FALLBACK_MODEL_ID}...")
+    model = AutoModelForCausalLM.from_pretrained(
+        FALLBACK_MODEL_ID,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(FALLBACK_MODEL_ID, trust_remote_code=True)
+    print(f"✅ Fallback loaded: {FALLBACK_MODEL_ID}")
+
+# 3. LoRA 설정
+model = prepare_model_for_kbit_training(model)
+
+lora_config = LoraConfig(
+    r=LORA_R,
+    lora_alpha=LORA_ALPHA,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM"
+)
+
+model = get_peft_model(model, lora_config)
+model.config.use_cache = False
+
 tokenizer.pad_token = tokenizer.eos_token
-print(f"✅ LoRA configured: r={LORA_R}, alpha={LORA_ALPHA}")
+tokenizer.padding_side = "right"
 
-# 3. 데이터셋 로드
-print(f"📚 Loading Dataset from {DATASET_PATH}...")
+print(f"✅ LoRA: r={LORA_R}, alpha={LORA_ALPHA}")
+model.print_trainable_parameters()
+
+# 4. 데이터셋 로드
+print(f"📚 Loading {DATASET_PATH}...")
 dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
-print(f"✅ Dataset loaded: {len(dataset)} samples")
+print(f"✅ Dataset: {len(dataset)} samples")
 
-# 4. 포맷팅 함수
+# 5. 포맷팅 함수
 def formatting_prompts_func(example):
     output_texts = []
-    if 'messages' not in example:
-        return []
-    batch_msgs = example['messages']
+    batch_msgs = example.get('messages', [])
     for msgs in batch_msgs:
         try:
             text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
             output_texts.append(text)
-        except Exception:
-            continue
+        except:
+            # 수동 포맷
+            text = ""
+            for msg in msgs:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                text += f"[{role}]: {content}\n"
+            output_texts.append(text)
     return output_texts
 
-# 5. 학습 설정 (안전 설정값)
-training_args = SFTConfig(
+# 6. 학습 설정
+training_args = TrainingArguments(
     output_dir=OUTPUT_DIR,
     num_train_epochs=1,
-    per_device_train_batch_size=BATCH_SIZE,  # 무조건 1
-    gradient_accumulation_steps=GRADIENT_ACCUM_STEPS,  # 실제 배치 = 4
+    per_device_train_batch_size=BATCH_SIZE,
+    gradient_accumulation_steps=GRADIENT_ACCUM_STEPS,
     learning_rate=LEARNING_RATE,
     fp16=not torch.cuda.is_bf16_supported(),
     bf16=torch.cuda.is_bf16_supported(),
@@ -117,18 +140,19 @@ training_args = SFTConfig(
     save_steps=500,
     save_total_limit=2,
     report_to="none",
-    optim="adamw_8bit",  # 옵티마이저 VRAM 절약
-    max_length=MAX_SEQ_LENGTH,
+    optim="adamw_8bit",
     warmup_steps=10,
+    gradient_checkpointing=True,
+    max_grad_norm=0.3,
 )
 
-# 6. HF 체크포인트 업로드 Callback
+# 7. HF 체크포인트 업로드 Callback
 class HFCheckpointCallback(TrainerCallback):
     def __init__(self, repo_id):
         self.repo_id = repo_id
         self.api = HfApi()
         self.api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True, private=True)
-        print(f"✅ HF Checkpoint Repo ready: {repo_id}")
+        print(f"✅ HF Repo: {repo_id}")
     
     def on_save(self, args, state, control, **kwargs):
         checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
@@ -139,28 +163,28 @@ class HFCheckpointCallback(TrainerCallback):
                     folder_path=checkpoint_dir,
                     repo_id=self.repo_id,
                     path_in_repo=f"checkpoint-{state.global_step}",
-                    commit_message=f"Checkpoint at step {state.global_step}"
+                    commit_message=f"Step {state.global_step}"
                 )
-                print(f"✅ Checkpoint-{state.global_step} uploaded!")
+                print(f"✅ Uploaded!")
             except Exception as e:
                 print(f"⚠️ Upload failed: {e}")
 
-# 7. Trainer 생성
+# 8. Trainer 생성
 trainer = SFTTrainer(
     model=model,
-    tokenizer=tokenizer,  # Unsloth 필수 - tokenizer 명시적 전달
+    tokenizer=tokenizer,
     train_dataset=dataset,
     args=training_args,
     formatting_func=formatting_prompts_func,
-    data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
+    max_seq_length=MAX_SEQ_LENGTH,
     callbacks=[HFCheckpointCallback(HF_CHECKPOINT_REPO)],
 )
 
 print(f"\n🚀 Kelron V3 Training Started!")
-print(f"   - Batch: {BATCH_SIZE} x {GRADIENT_ACCUM_STEPS} = {BATCH_SIZE * GRADIENT_ACCUM_STEPS}")
+print(f"   - Batch: {BATCH_SIZE} x {GRADIENT_ACCUM_STEPS}")
 print(f"   - Seq Length: {MAX_SEQ_LENGTH}")
 
-# 8. 학습 실행
+# 9. 학습 실행
 if has_checkpoint:
     checkpoints = [d for d in os.listdir(CHECKPOINT_DIR) 
                    if d.startswith("checkpoint") and os.path.isdir(os.path.join(CHECKPOINT_DIR, d))]
@@ -168,37 +192,33 @@ if has_checkpoint:
     if checkpoints:
         latest = sorted(checkpoints, key=lambda x: int(x.split('-')[1]))[-1]
         resume_path = os.path.join(CHECKPOINT_DIR, latest)
-        print(f"⏩ Resuming from: {resume_path}")
+        print(f"⏩ Resuming: {resume_path}")
         trainer.train(resume_from_checkpoint=resume_path)
-    elif os.path.exists(os.path.join(CHECKPOINT_DIR, "trainer_state.json")):
-        print(f"⏩ Resuming from: {CHECKPOINT_DIR}")
-        trainer.train(resume_from_checkpoint=CHECKPOINT_DIR)
     else:
-        print("⚠️ No valid checkpoint. Starting fresh.")
+        print("🆕 Starting fresh.")
         trainer.train()
 else:
-    print("🆕 Starting fresh training.")
+    print("🆕 Starting fresh.")
     trainer.train()
 
-# 9. 최종 저장
-print("💾 Saving final adapter...")
+# 10. 저장
+print("💾 Saving adapter...")
 trainer.model.save_pretrained(OUTPUT_DIR)
 tokenizer.save_pretrained(OUTPUT_DIR)
-print(f"✅ Adapter saved to {OUTPUT_DIR}")
+print(f"✅ Saved to {OUTPUT_DIR}")
 
-# 10. HuggingFace 최종 업로드
+# 11. HF 업로드
 try:
     api = HfApi()
     api.create_repo(repo_id=HF_CHECKPOINT_REPO, repo_type="model", exist_ok=True, private=True)
-    print(f"🚀 Uploading final adapter to {HF_CHECKPOINT_REPO}...")
+    print(f"🚀 Uploading to {HF_CHECKPOINT_REPO}...")
     api.upload_folder(
         folder_path=OUTPUT_DIR,
         repo_id=HF_CHECKPOINT_REPO,
         repo_type="model",
         path_in_repo="final_adapter",
-        commit_message=f"Final adapter ({TRAINING_VERSION})"
+        commit_message=f"Final ({TRAINING_VERSION})"
     )
-    print("✅ Final Adapter Uploaded to HuggingFace!")
+    print("✅ Uploaded!")
 except Exception as e:
     print(f"⚠️ Upload failed: {e}")
-    print("❗ Please download the adapter folder manually!")
