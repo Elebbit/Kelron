@@ -19,13 +19,13 @@ try:
 except ImportError:
     pass
 
-# 1. Model Selection (V3: Ministral 3B)
+# 1. Model Selection (V3: Ministral 3 14B)
 # ------------------------------------------------------------------------------
-# Ministral-3-3B-Instruct: 3B 파라미터, FP8로 8GB 이하
-MODEL_ID = "mistralai/Ministral-3-3B-Instruct-2512"
+# Plan A: Ministral 3 14B
+MODEL_ID = "mistralai/Ministral-3-14B-Instruct-2512"
 
-# Plan B: Mistral-7B (폴백)
-FALLBACK_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.2"
+# Plan B: Mistral NeMo 12B (폴백)
+FALLBACK_MODEL_ID = "mistralai/Mistral-Nemo-Instruct-2407"
 
 # 2. Training Version
 # ------------------------------------------------------------------------------
