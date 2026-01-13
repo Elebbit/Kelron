@@ -19,13 +19,13 @@ try:
 except ImportError:
     pass
 
-# 1. Model Selection (V3: Ministral 3 14B)
+# 1. Model Selection (V3: Ministral 3 14B Base)
 # ------------------------------------------------------------------------------
-# Plan A: Ministral 3 14B
-MODEL_ID = "mistralai/Ministral-3-14B-Instruct-2512"
+# Plan A: Ministral 3 14B Base
+MODEL_ID = "mistralai/Ministral-3-14B-Base-2512"
 
-# Plan B: Mistral NeMo 12B (폴백)
-FALLBACK_MODEL_ID = "mistralai/Mistral-Nemo-Instruct-2407"
+# Plan B: Ministral 8B Base (폴백)
+FALLBACK_MODEL_ID = "mistralai/Ministral-3-8B-Base-2512"
 
 # 2. Training Version
 # ------------------------------------------------------------------------------
